@@ -70,7 +70,7 @@ final class NotchModel: ObservableObject {
         self.settings = settings
         store.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &bag)
         settings.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &bag)
-        store.onTransition = { [weak self] record in self?.handleTransition(record) }
+        store.onTransition = { [weak self] record, previous in self?.handleTransition(record, from: previous) }
         clock = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.now = Date() }
         }
@@ -213,13 +213,22 @@ final class NotchModel: ObservableObject {
 
     // MARK: Sounds
 
-    private func handleTransition(_ r: SessionRecord) {
+    private var lastSound: [String: Date] = [:]
+
+    /// Plays a sound only when a task really finishes or really gets blocked, and never twice
+    /// in a row for the same session within a short window.
+    private func handleTransition(_ r: SessionRecord, from previous: SessionState) {
         guard settings.soundsOn else { return }
-        switch r.state {
-        case .done: NSSound(named: NSSound.Name(buddy.doneSound))?.play()
-        case .needs: NSSound(named: NSSound.Name(buddy.needsSound))?.play()
-        default: break
+        let name: String
+        switch (previous, r.state) {
+        case (.working, .done), (.needs, .done): name = buddy.doneSound
+        case (.working, .needs): name = buddy.needsSound
+        default: return
         }
+        let key = "\(r.id)|\(r.state.rawValue)"
+        if let last = lastSound[key], Date().timeIntervalSince(last) < 20 { return }
+        lastSound[key] = Date()
+        NSSound(named: NSSound.Name(name))?.play()
     }
 
     // MARK: Welcome and demo
@@ -261,9 +270,10 @@ final class NotchModel: ObservableObject {
 
     private func updateExtra(_ id: String, _ change: (inout SessionRecord) -> Void) {
         guard let i = extras.firstIndex(where: { $0.id == "peekaboo.demo.\(id)" }) else { return }
+        let previous = extras[i].state
         change(&extras[i])
         extras[i].updatedAt = Date()
-        handleTransition(extras[i])
+        handleTransition(extras[i], from: previous)
     }
 
     @discardableResult

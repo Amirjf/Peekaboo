@@ -6,8 +6,8 @@ import PeekabooCore
 final class SessionStore: ObservableObject {
     @Published private(set) var records: [SessionRecord] = []
 
-    /// Called when a session moves into a new state (not on the first load).
-    var onTransition: ((SessionRecord) -> Void)?
+    /// Called when a known session moves into a new state, with the state it left.
+    var onTransition: ((SessionRecord, SessionState) -> Void)?
 
     private var source: DispatchSourceFileSystemObject?
     private var timer: Timer?
@@ -38,7 +38,10 @@ final class SessionStore: ObservableObject {
     func reload() {
         let now = Date()
         var fresh: [SessionRecord] = []
-        for r in SessionIO.readAll() {
+        for var r in SessionIO.readAll() {
+            // Records written by older hooks may still carry raw markup.
+            r.title = r.title.map(TextCleaner.clean).flatMap { $0.isEmpty ? nil : $0 }
+            r.message = r.message.map(TextCleaner.clean)
             let stale = now.timeIntervalSince(r.updatedAt) > 24 * 3600
             let gone = r.pid.map { !ProcessTree.isAlive($0) } ?? false
             if stale || gone {
@@ -51,8 +54,10 @@ final class SessionStore: ObservableObject {
 
         if loadedOnce {
             let old = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-            for r in fresh where old[r.id]?.state != r.state {
-                onTransition?(r)
+            for r in fresh {
+                if let previous = old[r.id]?.state, previous != r.state {
+                    onTransition?(r, previous)
+                }
             }
         }
         loadedOnce = true

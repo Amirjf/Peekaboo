@@ -18,16 +18,6 @@ let now = Date()
 let existing = SessionIO.read(url)
 var record = existing ?? SessionRecord(id: sessionId, state: .waiting, now: now)
 
-func summarize(_ prompt: String) -> String? {
-    let line = prompt
-        .split(whereSeparator: \.isNewline)
-        .map { $0.trimmingCharacters(in: .whitespaces) }
-        .first { !$0.isEmpty }
-    guard let line else { return nil }
-    let collapsed = line.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-    return collapsed.count > 60 ? String(collapsed.prefix(59)) + "…" : collapsed
-}
-
 switch event {
 case "SessionStart":
     if existing != nil { exit(0) }
@@ -36,7 +26,7 @@ case "UserPromptSubmit":
     record.state = .working
     record.message = nil
     record.startedAt = now
-    if let prompt = json["prompt"] as? String, let title = summarize(prompt) {
+    if let prompt = json["prompt"] as? String, let title = TextCleaner.title(from: prompt) {
         record.title = title
     }
 case "PreToolUse", "PostToolUse":
@@ -47,13 +37,19 @@ case "PreToolUse", "PostToolUse":
     record.message = nil
 case "Notification":
     let type = json["notification_type"] as? String
-    let message = (json["message"] as? String) ?? "Claude needs your attention"
-    if type == "idle_prompt" || message.localizedCaseInsensitiveContains("waiting for your input") {
-        exit(0)
-    }
+    let message = TextCleaner.clean((json["message"] as? String) ?? "")
+    // Only permission prompts and questions mean Claude is blocked on you. Idle reminders
+    // ("waiting for your input") and the like arrive after a task is done and must not reopen it.
+    let asksUser = type.map { $0 == "permission_prompt" || $0 == "elicitation_dialog" }
+        ?? message.localizedCaseInsensitiveContains("permission")
+    let running = existing.map { $0.state == .working || $0.state == .needs } ?? true
+    guard asksUser, running else { exit(0) }
+    if existing?.state == .needs && existing?.message == message { exit(0) }
     record.state = .needs
-    record.message = message
+    record.message = message.isEmpty ? "Claude needs your attention" : message
 case "Stop":
+    // A repeated Stop must not bump the time, or a done card the user already saw reopens.
+    if existing?.state == .done { exit(0) }
     record.state = .done
     record.message = nil
 case "SessionEnd":
