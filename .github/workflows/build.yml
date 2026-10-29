@@ -1,0 +1,34 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Peekaboo.app
+        run: scripts/build-app.sh "0.1.${{ github.run_number }}" "${{ github.run_number }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Peekaboo
+          path: build/Peekaboo.zip
+
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v0.1.${{ github.run_number }}" build/Peekaboo.zip \
+            --title "Peekaboo 0.1.${{ github.run_number }}" \
+            --notes "Automatic build of ${{ github.sha }}. Install or update with: curl -fsSL https://raw.githubusercontent.com/amirjf/peekaboo/main/install.sh | bash" \
+            --latest
